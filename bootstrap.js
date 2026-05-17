@@ -4,8 +4,9 @@ var MonthlyStats = {
   addon: null,
   services: null,
   menuItemId: "monthly-stats-menuitem",
-  tabBarId: "monthly-stats-tabbar",
-  panelRootId: "monthly-stats-left-panel",
+  tabType: "monthly-stats",
+  tabHookType: "monthly",
+  tabTitle: "文献统计",
   htmlNS: "http://www.w3.org/1999/xhtml",
   windowListener: null,
   windowState: new WeakMap(),
@@ -145,79 +146,18 @@ var MonthlyStats = {
     }
   },
 
-  findCollectionsTree(win) {
-    let doc = win.document;
-    let selectors = [
-      "#zotero-collections-tree",
-      "#collections-tree",
-      "tree#zotero-collections-tree",
-      "tree#collections-tree",
-      "#zotero-collections-tree-container tree",
-      "#zotero-collections-pane tree",
-    ];
-
-    for (let selector of selectors) {
-      let node = doc.querySelector(selector);
-      if (node) {
-        return node;
-      }
-    }
-
-    return null;
-  },
-
   installInWindow(win) {
     if (this.windowState.get(win)) {
       return;
     }
 
-    let doc = win.document;
-    let tree = this.findCollectionsTree(win);
-    if (!tree || !tree.parentElement || !tree.parentElement.parentElement) {
-      Zotero.debug("[monthly-stats] collections tree not found");
-      this.installMenuItem(win);
-      return;
-    }
-
-    let treeHost = tree.parentElement;
-    let hostParent = treeHost.parentElement;
-
-    let tabBar = doc.createXULElement("hbox");
-    tabBar.id = this.tabBarId;
-    tabBar.setAttribute(
-      "style",
-      "display:flex;gap:6px;padding:4px 6px 6px;border-bottom:1px solid var(--material-border,#d8d8d8);"
-    );
-
-    let collectionsTab = doc.createXULElement("toolbarbutton");
-    collectionsTab.label = "集合";
-    collectionsTab.setAttribute("style", this.tabButtonStyle(true));
-
-    let statsTab = doc.createXULElement("toolbarbutton");
-    statsTab.label = "统计";
-    statsTab.setAttribute("style", this.tabButtonStyle(false));
-
-    tabBar.appendChild(collectionsTab);
-    tabBar.appendChild(statsTab);
-
-    let statsPanel = doc.createXULElement("vbox");
-    statsPanel.id = this.panelRootId;
-    statsPanel.setAttribute("flex", "1");
-    statsPanel.setAttribute("style", "display:none;min-height:260px;overflow:auto;");
-
-    hostParent.insertBefore(tabBar, treeHost);
-    hostParent.insertBefore(statsPanel, treeHost.nextSibling);
-
     let state = {
-      tree,
-      treeHost,
-      hostParent,
-      tabBar,
-      collectionsTab,
-      statsTab,
-      statsPanel,
       menuItem: null,
-      activeTab: "collections",
+      tabID: null,
+      tabData: null,
+      tabHooksInstalled: false,
+      previousTabHooks: null,
+      statsPanel: null,
       selectedCollectionID: null,
       selectedDay: null,
       payload: null,
@@ -225,29 +165,27 @@ var MonthlyStats = {
       allDaily: [],
       ui: null,
       loadSeq: 0,
+      heatGran: "day",
+      viewMode: null,
     };
-
-    collectionsTab.addEventListener("command", () => this.switchTab(win, "collections"));
-    statsTab.addEventListener("command", () => this.switchTab(win, "stats"));
 
     this.windowState.set(win, state);
     this.installMenuItem(win);
-    this.buildStatsUI(win);
-    this.switchTab(win, "collections");
+    this.installTabHooks(win);
   },
 
   removeFromWindow(win) {
     let state = this.windowState.get(win);
     if (state) {
-      if (state.tabBar?.parentElement) {
-        state.tabBar.remove();
+      if (state.tabID && win.document.getElementById(state.tabID)) {
+        try {
+          win.Zotero_Tabs?.close?.(state.tabID);
+        } catch (e) {
+          Zotero.debug("[monthly-stats] close stats tab failed: " + e);
+          win.document.getElementById(state.tabID)?.remove();
+        }
       }
-      if (state.statsPanel?.parentElement) {
-        state.statsPanel.remove();
-      }
-      if (state.treeHost) {
-        state.treeHost.style.display = "";
-      }
+      this.uninstallTabHooks(win);
     }
 
     let menuNode = win.document.getElementById(this.menuItemId);
@@ -258,31 +196,158 @@ var MonthlyStats = {
     this.windowState.delete(win);
   },
 
-  tabButtonStyle(active) {
-    if (active) {
-      return "padding:4px 10px;border-radius:8px;background:#0f766e;color:white;border:1px solid #0f766e;";
-    }
-    return "padding:4px 10px;border-radius:8px;background:#f3f3f3;color:#243746;border:1px solid #d4d4d4;";
+  resetStatsState(state) {
+    state.tabID = null;
+    state.tabData = null;
+    state.statsPanel = null;
+    state.payload = null;
+    state.allSeries = [];
+    state.allDaily = [];
+    state.ui = null;
+    state.loadSeq += 1;
   },
 
-  switchTab(win, tabName) {
+  installTabHooks(win) {
     let state = this.windowState.get(win);
-    if (!state) {
+    let tabs = win.Zotero_Tabs;
+    if (!state || state.tabHooksInstalled || !tabs?.tabHooks) {
       return;
     }
 
-    let showStats = tabName === "stats";
-    state.activeTab = showStats ? "stats" : "collections";
+    let type = this.tabHookType;
+    state.previousTabHooks = {};
+    let ensureAction = (action) => {
+      if (!tabs.tabHooks[action]) {
+        tabs.tabHooks[action] = {};
+      }
+      state.previousTabHooks[action] = tabs.tabHooks[action][type];
+    };
 
-    state.treeHost.style.display = showStats ? "none" : "";
-    state.statsPanel.style.display = showStats ? "flex" : "none";
+    ensureAction("focusFirst");
+    ensureAction("refocus");
+    ensureAction("undoClose");
+    ensureAction("restoreState");
 
-    state.collectionsTab.setAttribute("style", this.tabButtonStyle(!showStats));
-    state.statsTab.setAttribute("style", this.tabButtonStyle(showStats));
+    tabs.tabHooks.focusFirst[type] = (tab) => this.focusStatsTab(win, tab?.id);
+    tabs.tabHooks.refocus[type] = (tab) => this.focusStatsTab(win, tab?.id);
+    tabs.tabHooks.undoClose[type] = async ({ data }, tabIndex) => {
+      return this.openStatsTab(win, {
+        index: Math.max(1, tabIndex || 1),
+        select: false,
+        initialState: data || {},
+      });
+    };
+    tabs.tabHooks.restoreState[type] = async (tab, tabIndex) => {
+      await this.openStatsTab(win, {
+        index: Math.max(1, tabIndex || 1),
+        select: !!tab.selected,
+        initialState: tab.data || {},
+      });
+      return { itemID: null };
+    };
 
-    if (showStats) {
-      this.refreshStatsData(win, false);
+    state.tabHooksInstalled = true;
+  },
+
+  uninstallTabHooks(win) {
+    let state = this.windowState.get(win);
+    let tabs = win.Zotero_Tabs;
+    if (!state?.tabHooksInstalled || !tabs?.tabHooks || !state.previousTabHooks) {
+      return;
     }
+
+    for (let [action, previousHook] of Object.entries(state.previousTabHooks)) {
+      if (!tabs.tabHooks[action]) {
+        continue;
+      }
+      if (previousHook) {
+        tabs.tabHooks[action][this.tabHookType] = previousHook;
+      } else {
+        delete tabs.tabHooks[action][this.tabHookType];
+      }
+    }
+
+    state.tabHooksInstalled = false;
+    state.previousTabHooks = null;
+  },
+
+  focusStatsTab(win, tabID) {
+    let root = tabID ? win.document.getElementById(tabID) : null;
+    root = root || this.windowState.get(win)?.statsPanel;
+    let focusable = root?.querySelector?.("select, button, input, [tabindex]");
+    if (focusable?.focus) {
+      focusable.focus();
+    }
+  },
+
+  async openStatsTab(win, options = {}) {
+    let state = this.windowState.get(win);
+    if (!state) {
+      this.installInWindow(win);
+      state = this.windowState.get(win);
+    }
+    if (!state) {
+      return false;
+    }
+
+    this.installTabHooks(win);
+
+    let tabs = win.Zotero_Tabs;
+    if (!tabs?.add || !tabs?.select || !tabs?.deck) {
+      Zotero.debug("[monthly-stats] Zotero_Tabs unavailable; cannot open independent dashboard");
+      win.alert?.("Monthly Literature Stats needs Zotero's tab interface to show the independent dashboard.");
+      return false;
+    }
+
+    if (state.tabID && win.document.getElementById(state.tabID)) {
+      if (options.select !== false) {
+        tabs.select(state.tabID);
+      }
+      await this.refreshStatsData(win, false);
+      return true;
+    }
+
+    let initialState = options.initialState || {};
+    state.selectedCollectionID =
+      typeof initialState.selectedCollectionID === "number"
+        ? initialState.selectedCollectionID
+        : this.getSelectedCollectionID(win);
+    state.selectedDay = initialState.selectedDay || null;
+    state.heatGran = initialState.heatGran || "day";
+    state.viewMode = initialState.viewMode || null;
+
+    state.tabData = {
+      pluginID: this.addon?.id || "monthly-stats@konstellation.local",
+      selectedCollectionID: state.selectedCollectionID,
+      selectedDay: state.selectedDay,
+      heatGran: state.heatGran,
+      viewMode: state.viewMode,
+    };
+
+    let tab = tabs.add({
+      type: this.tabType,
+      title: this.tabTitle,
+      index: options.index,
+      select: options.select !== false,
+      data: state.tabData,
+      onClose: () => this.resetStatsState(state),
+    });
+
+    let container = tab.container;
+    state.tabID = tab.id;
+    container.setAttribute("style", "display:flex;flex:1;min-height:0;min-width:0;");
+    container.onTabSelectionChanged = (selected) => {
+      if (selected && state.ui && !state.payload) {
+        this.refreshStatsData(win, false);
+      }
+    };
+
+    state.statsPanel = this.makeEl(win.document, "div", "monthly-stats-shell");
+    container.appendChild(state.statsPanel);
+
+    this.buildStatsUI(win);
+    await this.refreshStatsData(win, false);
+    return true;
   },
 
   installMenuItem(win) {
@@ -307,7 +372,7 @@ var MonthlyStats = {
       if (!this.windowState.get(win)) {
         this.installInWindow(win);
       }
-      this.switchTab(win, "stats");
+      this.openStatsTab(win);
     });
     toolsPopup.appendChild(menuitem);
 
@@ -627,12 +692,252 @@ var MonthlyStats = {
     }
   },
 
-  makeEl(doc, tag, styleText) {
+  makeEl(doc, tag, className, textContent) {
     let el = doc.createElementNS(this.htmlNS, tag);
-    if (styleText) {
-      el.setAttribute("style", styleText);
+    if (className) {
+      el.setAttribute("class", className);
+    }
+    if (textContent !== undefined) {
+      el.textContent = textContent;
     }
     return el;
+  },
+
+  dashboardCSS() {
+    return `
+.monthly-stats-shell {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.monthly-stats-root {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  color: var(--fill-primary, rgba(0, 0, 0, .86));
+  background: var(--material-background, #fff);
+  font: 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.monthly-stats-root * {
+  box-sizing: border-box;
+}
+.ms-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--material-toolbar, var(--material-sidepane, #f7f7f7));
+  border-bottom: var(--material-panedivider, 1px solid var(--color-panedivider, #dadada));
+}
+.ms-title-block {
+  min-width: 180px;
+  margin-inline-end: auto;
+}
+.ms-title {
+  margin: 0;
+  color: var(--fill-primary, #1f1f1f);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.ms-subtitle {
+  margin-top: 2px;
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+  font-size: 12px;
+  line-height: 1.25;
+}
+.ms-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ms-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ms-control select,
+.ms-control input {
+  min-width: 108px;
+  height: 26px;
+  color: var(--fill-primary, #1f1f1f);
+  background: var(--material-background, #fff);
+  border: var(--material-border50, 1px solid rgba(0, 0, 0, .08));
+  border-radius: 5px;
+  padding: 2px 7px;
+  font: inherit;
+}
+.ms-control input {
+  min-width: 118px;
+}
+.ms-button,
+.ms-segment-button {
+  height: 26px;
+  margin: 0;
+  padding: 2px 10px;
+  color: var(--fill-primary, #1f1f1f);
+  background: var(--material-button, #fff);
+  border: var(--material-border50, 1px solid rgba(0, 0, 0, .08));
+  border-radius: 5px;
+  font: inherit;
+  line-height: 1.2;
+  cursor: default;
+}
+.ms-button:hover,
+.ms-segment-button:hover {
+  background: var(--fill-senary, rgba(0, 0, 0, .03));
+}
+.ms-segment {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px;
+  border-radius: 6px;
+  background: var(--fill-quinary, rgba(0, 0, 0, .05));
+}
+.ms-segment-button {
+  min-width: 48px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+}
+.ms-segment-button.active {
+  color: var(--fill-primary, #1f1f1f);
+  background: var(--material-background, #fff);
+  border-color: var(--fill-quinary, rgba(0, 0, 0, .05));
+  box-shadow: 0 1px 1px var(--fill-senary, rgba(0, 0, 0, .03));
+}
+.ms-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: var(--material-sidepane, #f2f2f2);
+}
+.ms-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
+  gap: 12px;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.ms-primary,
+.ms-side-card,
+.ms-chart-card,
+.ms-summary-card {
+  background: var(--material-background, #fff);
+  border: var(--material-border50, 1px solid rgba(0, 0, 0, .08));
+  border-radius: 6px;
+}
+.ms-primary {
+  min-width: 0;
+  padding: 12px;
+}
+.ms-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ms-summary-card {
+  min-height: 66px;
+  padding: 10px 11px;
+}
+.ms-summary-title {
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+  font-size: 11px;
+  line-height: 1.2;
+}
+.ms-summary-value {
+  margin-top: 5px;
+  color: var(--fill-primary, #1f1f1f);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ms-summary-value.small {
+  font-size: 13px;
+  white-space: pre-line;
+}
+.ms-chart-card {
+  min-height: 360px;
+  padding: 8px;
+}
+.ms-chart {
+  display: block;
+  width: 100%;
+  min-height: 300px;
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+  background: var(--material-background, #fff);
+}
+.ms-side {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+.ms-side-card {
+  padding: 12px;
+}
+.ms-side-title {
+  margin: 0 0 8px;
+  color: var(--fill-primary, #1f1f1f);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ms-side-text,
+.ms-quality-row,
+.ms-foot {
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ms-status {
+  color: var(--fill-secondary, rgba(0, 0, 0, .55));
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ms-status.error {
+  color: var(--accent-red, #db2c3a);
+}
+.ms-quality-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-block: 4px;
+  border-top: var(--material-border50, 1px solid rgba(0, 0, 0, .08));
+}
+.ms-quality-row:first-of-type {
+  border-top: 0;
+}
+.ms-focus-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ms-muted {
+  color: var(--fill-tertiary, rgba(0, 0, 0, .25));
+}
+@media (max-width: 900px) {
+  .ms-dashboard {
+    grid-template-columns: 1fr;
+  }
+  .ms-summary {
+    grid-template-columns: 1fr;
+  }
+}`;
   },
 
   buildStatsUI(win) {
@@ -644,56 +949,24 @@ var MonthlyStats = {
     let doc = win.document;
     state.statsPanel.replaceChildren();
 
-    let wrap = this.makeEl(doc, "div", "padding:14px;background:#f0f4f3;min-height:280px;");
+    let style = this.makeEl(doc, "style");
+    style.textContent = this.dashboardCSS();
+    let wrap = this.makeEl(doc, "div", "monthly-stats-root");
 
-    let header = this.makeEl(
-      doc,
-      "div",
-      "border-radius:16px;background:#fff;padding:16px 18px;margin-bottom:10px;box-shadow:0 2px 12px rgba(47,74,70,0.07);border:1px solid rgba(200,212,208,0.4);"
-    );
+    let toolbar = this.makeEl(doc, "div", "ms-toolbar");
+    let titleBlock = this.makeEl(doc, "div", "ms-title-block");
+    let title = this.makeEl(doc, "h1", "ms-title", "文献添加统计");
+    let subtitle = this.makeEl(doc, "div", "ms-subtitle", "按 Zotero 条目的添加日期汇总新增趋势");
+    titleBlock.appendChild(title);
+    titleBlock.appendChild(subtitle);
 
-    let title = this.makeEl(doc, "div", "margin:0 0 10px 0;font-size:18px;font-weight:700;color:#1a3530;");
-    title.textContent = "文献添加统计";
-
-    let sub = this.makeEl(doc, "div", "color:#7a9e9a;font-size:11px;margin-bottom:12px;letter-spacing:0.2px;");
-
-    let controls = this.makeEl(doc, "div", "display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;");
-    let dayFocusBar = this.makeEl(
-      doc,
-      "div",
-      "display:flex;align-items:center;gap:8px;margin-top:6px;"
-    );
-
-    let selectStyle = "height:26px;border:1px solid #7ab0a8;border-radius:14px;background:#e8f2f0;padding:0 24px 0 10px;font-size:12px;color:#1a3530;outline:none;min-width:110px;appearance:none;-moz-appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg, transparent 50%, #e8f2f0 50%),linear-gradient(135deg, #e8f2f0 50%, transparent 50%),linear-gradient(to right, #0f766e, #0f766e);background-position:calc(100% - 13px) 50%,calc(100% - 8px) 50%,100% 0;background-size:4px 4px,4px 4px,20px 100%;background-repeat:no-repeat;";
-    let collectionSelect = this.makeEl(doc, "select", selectStyle + "min-width:120px;max-width:200px;");
-    let viewSelect = this.makeEl(doc, "select", selectStyle + "min-width:100px;");
-    let rangeSelect = this.makeEl(doc, "select", selectStyle + "min-width:110px;");
-    let startMonth = this.makeEl(doc, "input", "height:26px;border:1px solid #7ab0a8;border-radius:14px;background:#fff;padding:0 8px;font-size:12px;color:#2f4a46;outline:none;");
-    let endMonth = this.makeEl(doc, "input", "height:26px;border:1px solid #7ab0a8;border-radius:14px;background:#fff;padding:0 8px;font-size:12px;color:#2f4a46;outline:none;");
+    let controls = this.makeEl(doc, "div", "ms-toolbar-controls");
+    let collectionSelect = this.makeEl(doc, "select");
+    let rangeSelect = this.makeEl(doc, "select");
+    let startMonth = this.makeEl(doc, "input");
+    let endMonth = this.makeEl(doc, "input");
     startMonth.setAttribute("type", "month");
     endMonth.setAttribute("type", "month");
-
-    let applyBtn = this.makeEl(doc, "button", "height:26px;border:none;border-radius:14px;background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;padding:0 14px;font-size:12px;cursor:pointer;font-weight:500;letter-spacing:0.2px;box-shadow:0 1px 6px rgba(15,118,110,0.22);transition:opacity 0.15s;");
-    applyBtn.textContent = "应用";
-    let clearDayBtn = this.makeEl(
-      doc,
-      "button",
-      "height:24px;border:none;border-radius:12px;background:rgba(15,118,110,0.08);color:#0f766e;padding:0 10px;font-size:11px;cursor:pointer;display:none;"
-    );
-    clearDayBtn.textContent = "清除焦点";
-    let granToggle = this.makeEl(
-      doc,
-      "button",
-      "height:26px;border:1px solid #b8d4d0;border-radius:14px;background:#fff;color:#0f766e;padding:0 10px;font-size:12px;cursor:pointer;display:none;font-weight:500;"
-    );
-    granToggle.textContent = "按月";
-    let dayFocusText = this.makeEl(doc, "span", "font-size:11px;color:#7a9e9a;");
-
-    this.appendOptions(viewSelect, [
-      { value: "heatmap", label: "打卡热力图" },
-      { value: "bar", label: "柱状图" },
-      { value: "line", label: "折线图" },
-    ]);
 
     this.appendOptions(rangeSelect, [
       { value: "3m", label: "近 3 个月" },
@@ -704,84 +977,146 @@ var MonthlyStats = {
       { value: "custom", label: "自定义" },
     ]);
 
+    let viewSegment = this.makeEl(doc, "div", "ms-segment");
+    let viewButtons = ["heatmap", "bar", "line"].map((value) => {
+      let label = value === "heatmap" ? "热力" : value === "bar" ? "柱状" : "折线";
+      let button = this.makeEl(doc, "button", "ms-segment-button", label);
+      button.setAttribute("type", "button");
+      button.dataset.view = value;
+      viewSegment.appendChild(button);
+      return button;
+    });
+
+    let applyBtn = this.makeEl(doc, "button", "ms-button", "应用");
+    applyBtn.setAttribute("type", "button");
+    let refreshBtn = this.makeEl(doc, "button", "ms-button", "刷新");
+    refreshBtn.setAttribute("type", "button");
+    let clearDayBtn = this.makeEl(doc, "button", "ms-button", "清除焦点");
+    clearDayBtn.setAttribute("type", "button");
+    clearDayBtn.hidden = true;
+
+    let granSegment = this.makeEl(doc, "div", "ms-segment");
+    let dayGranBtn = this.makeEl(doc, "button", "ms-segment-button active", "按天");
+    let monthGranBtn = this.makeEl(doc, "button", "ms-segment-button", "按月");
+    dayGranBtn.setAttribute("type", "button");
+    monthGranBtn.setAttribute("type", "button");
+    granSegment.appendChild(dayGranBtn);
+    granSegment.appendChild(monthGranBtn);
+    granSegment.hidden = true;
+
     controls.appendChild(this.wrapLabeledControl(doc, "集合", collectionSelect));
-    controls.appendChild(this.wrapLabeledControl(doc, "视图", viewSelect));
+    controls.appendChild(this.wrapLabeledControl(doc, "视图", viewSegment));
     controls.appendChild(this.wrapLabeledControl(doc, "范围", rangeSelect));
     controls.appendChild(this.wrapLabeledControl(doc, "从", startMonth));
     controls.appendChild(this.wrapLabeledControl(doc, "到", endMonth));
-    controls.appendChild(granToggle);
     controls.appendChild(applyBtn);
+    controls.appendChild(refreshBtn);
 
-    header.appendChild(title);
-    header.appendChild(sub);
-    header.appendChild(controls);
-    dayFocusBar.appendChild(dayFocusText);
-    dayFocusBar.appendChild(clearDayBtn);
-    header.appendChild(dayFocusBar);
+    toolbar.appendChild(titleBlock);
+    toolbar.appendChild(controls);
 
-    let panel = this.makeEl(
-      doc,
-      "div",
-      "border-radius:16px;background:#fff;padding:16px 18px;box-shadow:0 2px 12px rgba(47,74,70,0.07);border:1px solid rgba(200,212,208,0.4);"
-    );
+    let main = this.makeEl(doc, "div", "ms-main");
+    let dashboard = this.makeEl(doc, "div", "ms-dashboard");
+    let primary = this.makeEl(doc, "section", "ms-primary");
+    let summary = this.makeEl(doc, "div", "ms-summary");
 
-    let summary = this.makeEl(doc, "div", "display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px;");
-    let totalCard = this.createSummaryCard(doc, "文献总数", "#e8f5f4", "#0f766e", "16px");
-    let avgCard = this.createSummaryCard(doc, "月均新增", "#f0f7f4", "#14b8a6", "16px");
-    let peakCard = this.createSummaryCard(doc, "峰值日期", "#faf5e8", "#d97706", "12px");
-    peakCard.card.style.minHeight = "62px";
-    peakCard.value.style.whiteSpace = "pre-line";
-    peakCard.value.style.lineHeight = "1.08";
-    peakCard.value.style.overflow = "hidden";
-    peakCard.value.style.wordBreak = "break-word";
-    peakCard.value.style.maxWidth = "100%";
+    let totalCard = this.createSummaryCard(doc, "文献总数");
+    let avgCard = this.createSummaryCard(doc, "月均新增");
+    let peakCard = this.createSummaryCard(doc, "峰值日期", true);
 
     summary.appendChild(totalCard.card);
     summary.appendChild(avgCard.card);
     summary.appendChild(peakCard.card);
 
+    let chartCard = this.makeEl(doc, "div", "ms-chart-card");
     let chart = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chart.setAttribute("class", "ms-chart");
     chart.setAttribute("viewBox", "0 0 960 340");
     chart.setAttribute("preserveAspectRatio", "none");
-    chart.setAttribute(
-      "style",
-      "width:100%;height:300px;display:block;border-radius:12px;background:#fafcff;border:1px solid rgba(200,212,208,0.4);"
-    );
+    chartCard.appendChild(chart);
 
-    let foot = this.makeEl(doc, "div", "margin-top:10px;color:#7a9e9a;font-size:11px;letter-spacing:0.2px;");
+    primary.appendChild(summary);
+    primary.appendChild(chartCard);
 
-    panel.appendChild(summary);
-    panel.appendChild(chart);
-    panel.appendChild(foot);
+    let side = this.makeEl(doc, "aside", "ms-side");
+    let focusCard = this.makeEl(doc, "section", "ms-side-card");
+    focusCard.appendChild(this.makeEl(doc, "h2", "ms-side-title", "当前焦点"));
+    let dayFocusText = this.makeEl(doc, "div", "ms-side-text");
+    let focusActions = this.makeEl(doc, "div", "ms-focus-actions");
+    focusActions.appendChild(clearDayBtn);
+    focusActions.appendChild(granSegment);
+    focusCard.appendChild(dayFocusText);
+    focusCard.appendChild(focusActions);
 
-    wrap.appendChild(header);
-    wrap.appendChild(panel);
+    let qualityCard = this.makeEl(doc, "section", "ms-side-card");
+    qualityCard.appendChild(this.makeEl(doc, "h2", "ms-side-title", "数据质量"));
+    let statusText = this.makeEl(doc, "div", "ms-status", "等待加载...");
+    let qualityRows = this.makeEl(doc, "div");
+    let rawRows = this.createQualityRow(doc, "候选条目", "0");
+    let parsedRows = this.createQualityRow(doc, "有效日期", "0");
+    let filteredRows = this.createQualityRow(doc, "已排除类型", "0");
+    let invalidRows = this.createQualityRow(doc, "无效日期", "0");
+    qualityRows.appendChild(rawRows.row);
+    qualityRows.appendChild(parsedRows.row);
+    qualityRows.appendChild(filteredRows.row);
+    qualityRows.appendChild(invalidRows.row);
+    qualityCard.appendChild(statusText);
+    qualityCard.appendChild(qualityRows);
+
+    let footCard = this.makeEl(doc, "section", "ms-side-card");
+    footCard.appendChild(this.makeEl(doc, "h2", "ms-side-title", "说明"));
+    let foot = this.makeEl(doc, "div", "ms-foot", "切换集合会自动统计该集合及其子集合。");
+    footCard.appendChild(foot);
+
+    side.appendChild(focusCard);
+    side.appendChild(qualityCard);
+    side.appendChild(footCard);
+
+    dashboard.appendChild(primary);
+    dashboard.appendChild(side);
+    main.appendChild(dashboard);
+    wrap.appendChild(toolbar);
+    wrap.appendChild(main);
+
+    state.statsPanel.appendChild(style);
     state.statsPanel.appendChild(wrap);
 
     state.ui = {
       wrap,
-      sub,
+      subtitle,
       collectionSelect,
-      viewSelect,
+      viewButtons,
       rangeSelect,
       startMonth,
       endMonth,
       applyBtn,
+      refreshBtn,
       clearDayBtn,
-      granToggle,
+      granSegment,
+      dayGranBtn,
+      monthGranBtn,
       dayFocusText,
       totalValue: totalCard.value,
       avgValue: avgCard.value,
       peakValue: peakCard.value,
       peakTitle: peakCard.title,
       chart,
+      statusText,
+      rawRowsValue: rawRows.value,
+      parsedRowsValue: parsedRows.value,
+      filteredRowsValue: filteredRows.value,
+      invalidRowsValue: invalidRows.value,
       foot,
     };
 
-    viewSelect.addEventListener("change", () => {
-      this.savePref("extensions.monthly-stats.defaultView", viewSelect.value);
-      this.renderStats(win);
-    });
+    for (let button of viewButtons) {
+      button.addEventListener("click", () => {
+        state.viewMode = button.dataset.view;
+        this.savePref("extensions.monthly-stats.defaultView", state.viewMode);
+        this.updateTabData(state);
+        this.renderStats(win);
+      });
+    }
 
     rangeSelect.addEventListener("change", () => {
       if (rangeSelect.value !== "custom") {
@@ -793,6 +1128,8 @@ var MonthlyStats = {
     let onApply = () => this.renderStats(win, true);
     applyBtn.addEventListener("click", onApply);
     applyBtn.addEventListener("command", onApply);
+    refreshBtn.addEventListener("click", () => this.refreshStatsData(win, true));
+    refreshBtn.addEventListener("command", () => this.refreshStatsData(win, true));
 
     collectionSelect.addEventListener("change", () => {
       let raw = collectionSelect.value;
@@ -802,44 +1139,50 @@ var MonthlyStats = {
 
     clearDayBtn.addEventListener("click", () => {
       state.selectedDay = null;
+      this.updateTabData(state);
       this.renderStats(win, true);
     });
     clearDayBtn.addEventListener("command", () => {
       state.selectedDay = null;
+      this.updateTabData(state);
       this.renderStats(win, true);
     });
 
-    state.heatGran = "day";
-    granToggle.addEventListener("click", () => {
-      state.heatGran = state.heatGran === "day" ? "month" : "day";
-      granToggle.textContent = state.heatGran === "day" ? "按月" : "按天";
+    dayGranBtn.addEventListener("click", () => {
+      state.heatGran = "day";
+      this.updateTabData(state);
       this.renderStats(win, false);
     });
-    granToggle.addEventListener("command", () => {
-      state.heatGran = state.heatGran === "day" ? "month" : "day";
-      granToggle.textContent = state.heatGran === "day" ? "按月" : "按天";
+    monthGranBtn.addEventListener("click", () => {
+      state.heatGran = "month";
+      this.updateTabData(state);
       this.renderStats(win, false);
     });
   },
 
   wrapLabeledControl(doc, label, control) {
-    let wrap = this.makeEl(doc, "label", "display:inline-flex;gap:4px;align-items:center;color:#1d2a34;font-size:12px;");
-    let text = this.makeEl(doc, "span", "");
-    text.textContent = label;
+    let wrap = this.makeEl(doc, "div", "ms-control");
+    let text = this.makeEl(doc, "span", "", label);
     wrap.appendChild(text);
     wrap.appendChild(control);
     return wrap;
   },
 
-  createSummaryCard(doc, titleText, bgColor, accentColor, fontSize) {
-    let card = this.makeEl(doc, "div", `border-radius:12px;background:${bgColor};padding:10px 12px 8px;border:none;min-height:62px;display:flex;flex-direction:column;justify-content:flex-start;`);
-    let k = this.makeEl(doc, "div", "color:#7a9e9a;font-size:11px;letter-spacing:0.3px;font-weight:500;");
-    k.textContent = titleText;
-    let v = this.makeEl(doc, "div", `font-size:${fontSize};font-weight:700;margin-top:3px;color:${accentColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;box-sizing:border-box;`);
-    v.textContent = "—";
+  createSummaryCard(doc, titleText, smallValue) {
+    let card = this.makeEl(doc, "div", "ms-summary-card");
+    let k = this.makeEl(doc, "div", "ms-summary-title", titleText);
+    let v = this.makeEl(doc, "div", smallValue ? "ms-summary-value small" : "ms-summary-value", "-");
     card.appendChild(k);
     card.appendChild(v);
     return { card, value: v, title: k };
+  },
+
+  createQualityRow(doc, label, valueText) {
+    let row = this.makeEl(doc, "div", "ms-quality-row");
+    row.appendChild(this.makeEl(doc, "span", "", label));
+    let value = this.makeEl(doc, "strong", "", valueText);
+    row.appendChild(value);
+    return { row, value };
   },
 
   appendOptions(selectEl, list) {
@@ -856,6 +1199,23 @@ var MonthlyStats = {
       Zotero.Prefs.set(name, value, true);
     } catch (e) {
       Zotero.debug("[monthly-stats] save pref failed: " + e);
+    }
+  },
+
+  updateTabData(state) {
+    if (!state?.tabData) {
+      return;
+    }
+    state.tabData.selectedCollectionID = state.selectedCollectionID;
+    state.tabData.selectedDay = state.selectedDay;
+    state.tabData.heatGran = state.heatGran;
+    state.tabData.viewMode = state.viewMode;
+  },
+
+  setSegmentActive(buttons, activeValue, dataKey) {
+    for (let button of buttons || []) {
+      let isActive = button.dataset[dataKey] === activeValue;
+      button.classList.toggle("active", isActive);
     }
   },
 
@@ -890,7 +1250,8 @@ var MonthlyStats = {
     }
     let ui = state.ui;
     let seq = ++state.loadSeq;
-    ui.sub.textContent = "正在读取 Zotero 数据...";
+    ui.statusText.className = "ms-status";
+    ui.statusText.textContent = "正在读取 Zotero 数据...";
     ui.foot.textContent = "加载中...";
 
     let payload = await this.buildPanelPayload(win, state.selectedCollectionID);
@@ -919,10 +1280,12 @@ var MonthlyStats = {
 
     this.populateCollectionSelect(state, payload.collections || [], payload.collectionID);
 
-    if (!ui.viewSelect.value) {
+    if (!state.viewMode) {
       let okView = ["bar", "line", "heatmap"].includes(payload.defaultView);
-      ui.viewSelect.value = okView ? payload.defaultView : "heatmap";
+      state.viewMode = okView ? payload.defaultView : "heatmap";
     }
+    this.setSegmentActive(ui.viewButtons, state.viewMode, "view");
+
     if (!ui.rangeSelect.value) {
       let okRange = ["3m", "6m", "12m", "24m", "all"].includes(payload.defaultRange);
       ui.rangeSelect.value = okRange ? payload.defaultRange : "12m";
@@ -938,6 +1301,7 @@ var MonthlyStats = {
       ui.endMonth.value = "";
     }
 
+    this.updateTabData(state);
     this.renderStats(win);
   },
 
@@ -1015,7 +1379,7 @@ var MonthlyStats = {
       line.setAttribute("x2", left + width);
       line.setAttribute("y1", y);
       line.setAttribute("y2", y);
-      line.setAttribute("stroke", "#e8dfd0");
+      line.setAttribute("stroke", "var(--fill-quinary, rgba(0, 0, 0, .05))");
       line.setAttribute("stroke-width", "1");
       svg.appendChild(line);
 
@@ -1023,7 +1387,7 @@ var MonthlyStats = {
       let label = svg.ownerDocument.createElementNS(ns, "text");
       label.setAttribute("x", 8);
       label.setAttribute("y", y + 4);
-      label.setAttribute("fill", "#6f7c86");
+      label.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       label.setAttribute("font-size", "11");
       label.textContent = String(value);
       svg.appendChild(label);
@@ -1034,7 +1398,7 @@ var MonthlyStats = {
     axis.setAttribute("x2", left + width);
     axis.setAttribute("y1", top + height);
     axis.setAttribute("y2", top + height);
-    axis.setAttribute("stroke", "#bcae95");
+    axis.setAttribute("stroke", "var(--fill-tertiary, rgba(0, 0, 0, .25))");
     axis.setAttribute("stroke-width", "1.2");
     svg.appendChild(axis);
   },
@@ -1060,7 +1424,7 @@ var MonthlyStats = {
       t.setAttribute("x", x);
       t.setAttribute("y", top + height + 16);
       t.setAttribute("font-size", "10");
-      t.setAttribute("fill", "#7f8c95");
+      t.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       t.setAttribute("text-anchor", "middle");
       t.textContent = series[i].month;
       svg.appendChild(t);
@@ -1092,8 +1456,8 @@ var MonthlyStats = {
       rect.setAttribute("width", barW);
       rect.setAttribute("height", h);
       rect.setAttribute("rx", "2");
-      rect.setAttribute("fill", "#0f766e");
-      rect.setAttribute("opacity", "0.9");
+      rect.setAttribute("fill", "var(--accent-blue, #4072e5)");
+      rect.setAttribute("opacity", "0.86");
       svg.appendChild(rect);
     }
 
@@ -1119,7 +1483,7 @@ var MonthlyStats = {
 
     let polyline = svg.ownerDocument.createElementNS(ns, "polyline");
     polyline.setAttribute("fill", "none");
-    polyline.setAttribute("stroke", "#0f766e");
+    polyline.setAttribute("stroke", "var(--accent-teal, #59adc4)");
     polyline.setAttribute("stroke-width", "2.2");
     polyline.setAttribute("points", points.map((t) => t.x + "," + t.y).join(" "));
     svg.appendChild(polyline);
@@ -1129,7 +1493,7 @@ var MonthlyStats = {
       c.setAttribute("cx", pt.x);
       c.setAttribute("cy", pt.y);
       c.setAttribute("r", "2.3");
-      c.setAttribute("fill", "#134e4a");
+      c.setAttribute("fill", "var(--accent-blue, #4072e5)");
       svg.appendChild(c);
     }
 
@@ -1137,21 +1501,21 @@ var MonthlyStats = {
   },
 
   heatColor(count) {
-    if (!count || count <= 0) return "#edf0ec";
-    if (count >= 30) return "#0f766e";
-    if (count >= 20) return "#1f8e82";
-    if (count >= 12) return "#41a99f";
-    if (count >= 6) return "#79c5be";
-    return "#bfe3df";
+    if (!count || count <= 0) return "var(--fill-senary, rgba(0, 0, 0, .03))";
+    if (count >= 30) return "var(--accent-blue, #4072e5)";
+    if (count >= 20) return "var(--accent-teal, #59adc4)";
+    if (count >= 12) return "#79c5d0";
+    if (count >= 6) return "#a9dce2";
+    return "#d7eef1";
   },
 
   heatColorMonthly(count) {
-    if (!count || count <= 0) return "#edf0ec";
-    if (count >= 300) return "#0f766e";
-    if (count >= 200) return "#1f8e82";
-    if (count >= 120) return "#41a99f";
-    if (count >= 60) return "#79c5be";
-    return "#bfe3df";
+    if (!count || count <= 0) return "var(--fill-senary, rgba(0, 0, 0, .03))";
+    if (count >= 300) return "var(--accent-blue, #4072e5)";
+    if (count >= 200) return "var(--accent-teal, #59adc4)";
+    if (count >= 120) return "#79c5d0";
+    if (count >= 60) return "#a9dce2";
+    return "#d7eef1";
   },
 
   drawHeatmap(win, svg, dailySeries) {
@@ -1193,7 +1557,7 @@ var MonthlyStats = {
       monthText.setAttribute("y", rowY + cell - 1);
       monthText.setAttribute("text-anchor", "end");
       monthText.setAttribute("font-size", "10");
-      monthText.setAttribute("fill", "#64727d");
+      monthText.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       monthText.textContent = month;
       svg.appendChild(monthText);
 
@@ -1214,7 +1578,7 @@ var MonthlyStats = {
         rect.setAttribute("opacity", "0.96");
         rect.setAttribute("cursor", "pointer");
         if (selectedDay === p.day) {
-          rect.setAttribute("stroke", "#17212b");
+          rect.setAttribute("stroke", "var(--fill-primary, rgba(0, 0, 0, .86))");
           rect.setAttribute("stroke-width", "1.3");
         } else {
           rect.setAttribute("stroke", "transparent");
@@ -1229,6 +1593,7 @@ var MonthlyStats = {
             return;
           }
           curState.selectedDay = curState.selectedDay === p.day ? null : p.day;
+          this.updateTabData(curState);
           this.renderStats(win, true);
         });
         svg.appendChild(rect);
@@ -1244,7 +1609,7 @@ var MonthlyStats = {
       t.setAttribute("y", tickY);
       t.setAttribute("text-anchor", "middle");
       t.setAttribute("font-size", "9");
-      t.setAttribute("fill", "#71808a");
+      t.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       t.textContent = String(d);
       svg.appendChild(t);
     }
@@ -1286,7 +1651,7 @@ var MonthlyStats = {
       text.setAttribute("x", lx + 12);
       text.setAttribute("y", legendY);
       text.setAttribute("font-size", "9");
-      text.setAttribute("fill", "#65737e");
+      text.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       text.textContent = item.label;
       svg.appendChild(text);
       lx += legendWidths[i] + legendGap;
@@ -1330,7 +1695,7 @@ var MonthlyStats = {
       yearLabel.setAttribute("y", curY + cell / 2 + 4);
       yearLabel.setAttribute("text-anchor", "end");
       yearLabel.setAttribute("font-size", "10");
-      yearLabel.setAttribute("fill", "#7a9e9a");
+      yearLabel.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       yearLabel.setAttribute("font-weight", "600");
       yearLabel.textContent = year;
       svg.appendChild(yearLabel);
@@ -1357,7 +1722,7 @@ var MonthlyStats = {
           monLabel.setAttribute("y", top - 4);
           monLabel.setAttribute("text-anchor", "middle");
           monLabel.setAttribute("font-size", "8");
-          monLabel.setAttribute("fill", "#7a9e9a");
+          monLabel.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
           monLabel.textContent = ["1","2","3","4","5","6","7","8","9","10","11","12"][m];
           svg.appendChild(monLabel);
         }
@@ -1397,7 +1762,7 @@ var MonthlyStats = {
       text.setAttribute("x", lx + 11);
       text.setAttribute("y", legendY + 8);
       text.setAttribute("font-size", "8");
-      text.setAttribute("fill", "#7a9e9a");
+      text.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       text.textContent = item.label;
       svg.appendChild(text);
       lx += legendWidths[i] + legendGap;
@@ -1411,6 +1776,7 @@ var MonthlyStats = {
     }
 
     let ui = state.ui;
+    let viewMode = state.viewMode || "heatmap";
     let filtered = this.filterByRange(
       state.allSeries,
       ui.rangeSelect.value,
@@ -1428,28 +1794,31 @@ var MonthlyStats = {
       }
     }
 
-    ui.sub.textContent =
-      "Library ID: " +
-      (state.payload?.libraryID || "-") +
-      " | 数据点（月）: " +
-      filtered.length +
-      " | 条目行: " +
-      (state.payload?.debug?.rawRows ?? 0) +
-      " | 有效日期: " +
-      (state.payload?.debug?.parsedRows ?? 0);
+    let debug = state.payload?.debug || {};
+    ui.rawRowsValue.textContent = String(debug.rawRows ?? 0);
+    ui.parsedRowsValue.textContent = String(debug.parsedRows ?? 0);
+    ui.filteredRowsValue.textContent = String(debug.filteredTypeRows ?? 0);
+    ui.invalidRowsValue.textContent = String(debug.invalidDateRows ?? 0);
+    ui.subtitle.textContent = "当前范围 " + filtered.length + " 个月";
+    ui.statusText.className = state.payload?.error ? "ms-status error" : "ms-status";
+    ui.statusText.textContent = state.payload?.error
+      ? "读取失败"
+      : "已载入 Library " + (state.payload?.libraryID || "-");
 
     this.clearSvg(ui.chart);
     ui.chart.setAttribute("viewBox", "0 0 960 340");
     ui.chart.style.height = "300px";
 
-    let isHeatmap = ui.viewSelect.value === "heatmap";
+    this.setSegmentActive(ui.viewButtons, viewMode, "view");
+    let isHeatmap = viewMode === "heatmap";
     let canUseMonthlyGran = isHeatmap && filtered.length > 24;
     if (!canUseMonthlyGran && state.heatGran === "month") {
       state.heatGran = "day";
     }
-    ui.granToggle.style.display = canUseMonthlyGran ? "" : "none";
-    ui.granToggle.textContent = state.heatGran === "day" ? "按月" : "按天";
-    ui.clearDayBtn.style.display = state.selectedDay ? "" : "none";
+    ui.granSegment.hidden = !canUseMonthlyGran;
+    ui.dayGranBtn.classList.toggle("active", state.heatGran === "day");
+    ui.monthGranBtn.classList.toggle("active", state.heatGran === "month");
+    ui.clearDayBtn.hidden = !state.selectedDay;
     if (state.selectedDay && selectedDayData) {
       ui.dayFocusText.textContent =
         "日焦点: " + selectedDayData.day + "（新增 " + selectedDayData.count + " 篇）";
@@ -1463,7 +1832,8 @@ var MonthlyStats = {
       ui.totalValue.textContent = "0";
       ui.avgValue.textContent = "0";
       ui.peakValue.textContent = "-";
-      ui.foot.textContent = "数据读取错误: " + state.payload.error;
+      ui.dayFocusText.textContent = "数据读取错误: " + state.payload.error;
+      ui.foot.textContent = "错误已被限制在统计页内，不会影响 Zotero 库数据。";
       return;
     }
 
@@ -1471,12 +1841,7 @@ var MonthlyStats = {
       ui.totalValue.textContent = "0";
       ui.avgValue.textContent = "0";
       ui.peakValue.textContent = "-";
-      ui.foot.textContent =
-        "当前筛选区间内没有数据。无效日期行: " +
-        (state.payload?.debug?.invalidDateRows ?? 0) +
-        "，类型过滤行: " +
-        (state.payload?.debug?.filteredTypeRows ?? 0) +
-        (fromApply ? " | 已应用: " + new Date().toLocaleTimeString() : "");
+      ui.foot.textContent = "当前筛选区间内没有可统计的条目。";
       return;
     }
 
@@ -1484,7 +1849,7 @@ var MonthlyStats = {
     ui.totalValue.textContent = String(s.total);
     ui.avgValue.textContent = s.avg.toFixed(1);
     let gran = state.heatGran || "day";
-    let viewIsHeatmap = ui.viewSelect.value === "heatmap";
+    let viewIsHeatmap = viewMode === "heatmap";
     let useMonthlyGran = viewIsHeatmap && gran === "month" && canUseMonthlyGran;
     if (s.peak) {
       if (useMonthlyGran) {
@@ -1501,14 +1866,16 @@ var MonthlyStats = {
       ui.peakTitle.textContent = "峰值日期";
       ui.peakValue.textContent = "-";
     }
+
     ui.foot.textContent =
-      "提示：切换集合会自动统计该集合及其子集合。类型过滤行: " +
-      (state.payload?.debug?.filteredTypeRows ?? 0) +
+      "切换集合会自动统计该集合及其子集合。" +
       (fromApply ? " | 已应用: " + new Date().toLocaleTimeString() : "");
 
-    if (ui.viewSelect.value === "line") {
+    this.updateTabData(state);
+
+    if (viewMode === "line") {
       this.drawLine(ui.chart, filtered);
-    } else if (ui.viewSelect.value === "heatmap") {
+    } else if (viewMode === "heatmap") {
       let gran = state.heatGran || "day";
       if (gran === "month") {
         this.drawHeatmapMonthly(ui.chart, filtered);
