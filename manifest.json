@@ -1,18 +1,18 @@
 {
   "manifest_version": 2,
   "name": "Reference Additions Stats",
-  "version": "0.5.4",
+  "version": "1.0.0",
   "description": "Open a Zotero-native dashboard for reference additions statistics in Zotero 7, 8, and 9.",
   "author": "konstellation",
-  "homepage_url": "https://example.com",
+  "homepage_url": "https://xia-yh.github.io/zotero-reference-additions-stats/",
   "icons": {
     "48": "icon.svg",
     "96": "icon.svg"
   },
   "applications": {
     "zotero": {
-      "id": "reference-additions-stats@konstellation.local",
-      "update_url": "https://example.com/reference-additions-stats/updates.json",
+      "id": "reference-additions-stats@xia-yh.github.io",
+      "update_url": "https://xia-yh.github.io/zotero-reference-additions-stats/updates.json",
       "strict_min_version": "6.999",
       "strict_max_version": "9.0.*"
     }

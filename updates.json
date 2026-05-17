@@ -1,0 +1,19 @@
+{
+  "addons": {
+    "reference-additions-stats@xia-yh.github.io": {
+      "updates": [
+        {
+          "version": "1.0.0",
+          "update_link": "https://github.com/XIA-YH/zotero-reference-additions-stats/releases/download/v1.0.0/reference-additions-stats-1.0.0.xpi",
+          "update_hash": "sha256:d19130c83c88404a287cc955a4b21f1cc1cbbc9739fdb5bc5e9d4d5d4e20fb99",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "6.999",
+              "strict_max_version": "9.0.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
