@@ -167,6 +167,7 @@ var MonthlyStats = {
       loadSeq: 0,
       heatGran: "day",
       viewMode: null,
+      rangeInitialized: false,
     };
 
     this.windowState.set(win, state);
@@ -204,6 +205,7 @@ var MonthlyStats = {
     state.allSeries = [];
     state.allDaily = [];
     state.ui = null;
+    state.rangeInitialized = false;
     state.loadSeq += 1;
   },
 
@@ -734,8 +736,8 @@ var MonthlyStats = {
   border-bottom: var(--material-panedivider, 1px solid var(--color-panedivider, #dadada));
 }
 .ms-title-block {
-  min-width: 180px;
-  margin-inline-end: auto;
+  min-width: 148px;
+  margin-inline-end: 8px;
 }
 .ms-title {
   margin: 0;
@@ -755,6 +757,8 @@ var MonthlyStats = {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 1;
+  justify-content: flex-start;
 }
 .ms-control {
   display: inline-flex;
@@ -774,6 +778,9 @@ var MonthlyStats = {
   border-radius: 5px;
   padding: 2px 7px;
   font: inherit;
+}
+.ms-control:first-child select {
+  min-width: 240px;
 }
 .ms-control input {
   min-width: 118px;
@@ -822,15 +829,12 @@ var MonthlyStats = {
   background: var(--material-sidepane, #f2f2f2);
 }
 .ms-dashboard {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
-  gap: 12px;
+  display: block;
   width: 100%;
-  max-width: 1280px;
+  max-width: none;
   margin: 0 auto;
 }
 .ms-primary,
-.ms-side-card,
 .ms-chart-card,
 .ms-summary-card {
   background: var(--material-background, #fff);
@@ -870,7 +874,7 @@ var MonthlyStats = {
   white-space: pre-line;
 }
 .ms-chart-card {
-  min-height: 360px;
+  min-height: 420px;
   padding: 8px;
 }
 .ms-chart {
@@ -879,46 +883,6 @@ var MonthlyStats = {
   min-height: 300px;
   color: var(--fill-secondary, rgba(0, 0, 0, .55));
   background: var(--material-background, #fff);
-}
-.ms-side {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 12px;
-}
-.ms-side-card {
-  padding: 12px;
-}
-.ms-side-title {
-  margin: 0 0 8px;
-  color: var(--fill-primary, #1f1f1f);
-  font-size: 13px;
-  font-weight: 600;
-}
-.ms-side-text,
-.ms-quality-row,
-.ms-foot {
-  color: var(--fill-secondary, rgba(0, 0, 0, .55));
-  font-size: 12px;
-  line-height: 1.45;
-}
-.ms-status {
-  color: var(--fill-secondary, rgba(0, 0, 0, .55));
-  font-size: 12px;
-  line-height: 1.45;
-}
-.ms-status.error {
-  color: var(--accent-red, #db2c3a);
-}
-.ms-quality-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding-block: 4px;
-  border-top: var(--material-border50, 1px solid rgba(0, 0, 0, .08));
-}
-.ms-quality-row:first-of-type {
-  border-top: 0;
 }
 .ms-focus-actions {
   display: flex;
@@ -931,9 +895,6 @@ var MonthlyStats = {
   color: var(--fill-tertiary, rgba(0, 0, 0, .25));
 }
 @media (max-width: 900px) {
-  .ms-dashboard {
-    grid-template-columns: 1fr;
-  }
   .ms-summary {
     grid-template-columns: 1fr;
   }
@@ -963,32 +924,18 @@ var MonthlyStats = {
     let controls = this.makeEl(doc, "div", "ms-toolbar-controls");
     let collectionSelect = this.makeEl(doc, "select");
     let rangeSelect = this.makeEl(doc, "select");
-    let startMonth = this.makeEl(doc, "input");
-    let endMonth = this.makeEl(doc, "input");
-    startMonth.setAttribute("type", "month");
-    endMonth.setAttribute("type", "month");
-
-    this.appendOptions(rangeSelect, [
-      { value: "3m", label: "近 3 个月" },
-      { value: "6m", label: "近 6 个月" },
-      { value: "12m", label: "近 12 个月" },
-      { value: "24m", label: "近 24 个月" },
-      { value: "all", label: "全部" },
-      { value: "custom", label: "自定义" },
-    ]);
 
     let viewSegment = this.makeEl(doc, "div", "ms-segment");
-    let viewButtons = ["heatmap", "bar", "line"].map((value) => {
-      let label = value === "heatmap" ? "热力" : value === "bar" ? "柱状" : "折线";
+    let viewButtons = ["heatmap", "bar"].map((value) => {
+      let label = value === "heatmap" ? "热力" : "柱状";
       let button = this.makeEl(doc, "button", "ms-segment-button", label);
       button.setAttribute("type", "button");
       button.dataset.view = value;
       viewSegment.appendChild(button);
       return button;
     });
+    this.appendOptions(rangeSelect, this.rangeOptionsForView("heatmap"));
 
-    let applyBtn = this.makeEl(doc, "button", "ms-button", "应用");
-    applyBtn.setAttribute("type", "button");
     let refreshBtn = this.makeEl(doc, "button", "ms-button", "刷新");
     refreshBtn.setAttribute("type", "button");
     let clearDayBtn = this.makeEl(doc, "button", "ms-button", "清除焦点");
@@ -1007,9 +954,10 @@ var MonthlyStats = {
     controls.appendChild(this.wrapLabeledControl(doc, "集合", collectionSelect));
     controls.appendChild(this.wrapLabeledControl(doc, "视图", viewSegment));
     controls.appendChild(this.wrapLabeledControl(doc, "范围", rangeSelect));
-    controls.appendChild(this.wrapLabeledControl(doc, "从", startMonth));
-    controls.appendChild(this.wrapLabeledControl(doc, "到", endMonth));
-    controls.appendChild(applyBtn);
+    let granControl = this.wrapLabeledControl(doc, "粒度", granSegment);
+    granControl.hidden = true;
+    controls.appendChild(granControl);
+    controls.appendChild(clearDayBtn);
     controls.appendChild(refreshBtn);
 
     toolbar.appendChild(titleBlock);
@@ -1032,48 +980,13 @@ var MonthlyStats = {
     let chart = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
     chart.setAttribute("class", "ms-chart");
     chart.setAttribute("viewBox", "0 0 960 340");
-    chart.setAttribute("preserveAspectRatio", "none");
+    chart.setAttribute("preserveAspectRatio", "xMinYMin meet");
     chartCard.appendChild(chart);
 
     primary.appendChild(summary);
     primary.appendChild(chartCard);
 
-    let side = this.makeEl(doc, "aside", "ms-side");
-    let focusCard = this.makeEl(doc, "section", "ms-side-card");
-    focusCard.appendChild(this.makeEl(doc, "h2", "ms-side-title", "当前焦点"));
-    let dayFocusText = this.makeEl(doc, "div", "ms-side-text");
-    let focusActions = this.makeEl(doc, "div", "ms-focus-actions");
-    focusActions.appendChild(clearDayBtn);
-    focusActions.appendChild(granSegment);
-    focusCard.appendChild(dayFocusText);
-    focusCard.appendChild(focusActions);
-
-    let qualityCard = this.makeEl(doc, "section", "ms-side-card");
-    qualityCard.appendChild(this.makeEl(doc, "h2", "ms-side-title", "数据质量"));
-    let statusText = this.makeEl(doc, "div", "ms-status", "等待加载...");
-    let qualityRows = this.makeEl(doc, "div");
-    let rawRows = this.createQualityRow(doc, "候选条目", "0");
-    let parsedRows = this.createQualityRow(doc, "有效日期", "0");
-    let filteredRows = this.createQualityRow(doc, "已排除类型", "0");
-    let invalidRows = this.createQualityRow(doc, "无效日期", "0");
-    qualityRows.appendChild(rawRows.row);
-    qualityRows.appendChild(parsedRows.row);
-    qualityRows.appendChild(filteredRows.row);
-    qualityRows.appendChild(invalidRows.row);
-    qualityCard.appendChild(statusText);
-    qualityCard.appendChild(qualityRows);
-
-    let footCard = this.makeEl(doc, "section", "ms-side-card");
-    footCard.appendChild(this.makeEl(doc, "h2", "ms-side-title", "说明"));
-    let foot = this.makeEl(doc, "div", "ms-foot", "切换集合会自动统计该集合及其子集合。");
-    footCard.appendChild(foot);
-
-    side.appendChild(focusCard);
-    side.appendChild(qualityCard);
-    side.appendChild(footCard);
-
     dashboard.appendChild(primary);
-    dashboard.appendChild(side);
     main.appendChild(dashboard);
     wrap.appendChild(toolbar);
     wrap.appendChild(main);
@@ -1087,31 +1000,23 @@ var MonthlyStats = {
       collectionSelect,
       viewButtons,
       rangeSelect,
-      startMonth,
-      endMonth,
-      applyBtn,
       refreshBtn,
       clearDayBtn,
+      granControl,
       granSegment,
       dayGranBtn,
       monthGranBtn,
-      dayFocusText,
       totalValue: totalCard.value,
       avgValue: avgCard.value,
       peakValue: peakCard.value,
       peakTitle: peakCard.title,
       chart,
-      statusText,
-      rawRowsValue: rawRows.value,
-      parsedRowsValue: parsedRows.value,
-      filteredRowsValue: filteredRows.value,
-      invalidRowsValue: invalidRows.value,
-      foot,
     };
 
     for (let button of viewButtons) {
       button.addEventListener("click", () => {
         state.viewMode = button.dataset.view;
+        this.syncRangeOptions(state, state.ui.rangeSelect.value);
         this.savePref("extensions.monthly-stats.defaultView", state.viewMode);
         this.updateTabData(state);
         this.renderStats(win);
@@ -1119,15 +1024,10 @@ var MonthlyStats = {
     }
 
     rangeSelect.addEventListener("change", () => {
-      if (rangeSelect.value !== "custom") {
-        this.savePref("extensions.monthly-stats.defaultRange", rangeSelect.value);
-      }
+      this.savePref("extensions.monthly-stats.defaultRange", rangeSelect.value);
       this.renderStats(win);
     });
 
-    let onApply = () => this.renderStats(win, true);
-    applyBtn.addEventListener("click", onApply);
-    applyBtn.addEventListener("command", onApply);
     refreshBtn.addEventListener("click", () => this.refreshStatsData(win, true));
     refreshBtn.addEventListener("command", () => this.refreshStatsData(win, true));
 
@@ -1177,14 +1077,6 @@ var MonthlyStats = {
     return { card, value: v, title: k };
   },
 
-  createQualityRow(doc, label, valueText) {
-    let row = this.makeEl(doc, "div", "ms-quality-row");
-    row.appendChild(this.makeEl(doc, "span", "", label));
-    let value = this.makeEl(doc, "strong", "", valueText);
-    row.appendChild(value);
-    return { row, value };
-  },
-
   appendOptions(selectEl, list) {
     for (let item of list) {
       let opt = selectEl.ownerDocument.createElementNS(this.htmlNS, "option");
@@ -1192,6 +1084,47 @@ var MonthlyStats = {
       opt.textContent = item.label;
       selectEl.appendChild(opt);
     }
+  },
+
+  rangeOptionsForView(viewMode) {
+    if (viewMode === "bar") {
+      return [
+        { value: "12m", label: "近一年" },
+        { value: "36m", label: "近三年" },
+        { value: "all", label: "全部" },
+      ];
+    }
+
+    return [
+      { value: "6m", label: "近 6 个月" },
+      { value: "12m", label: "近一年" },
+      { value: "36m", label: "近三年" },
+      { value: "all", label: "全部" },
+    ];
+  },
+
+  syncRangeOptions(state, preferredValue) {
+    if (!state?.ui?.rangeSelect) {
+      return "12m";
+    }
+
+    let select = state.ui.rangeSelect;
+    let viewMode = state.viewMode === "bar" ? "bar" : "heatmap";
+    let options = this.rangeOptionsForView(viewMode);
+    let values = options.map((item) => item.value);
+    let nextValue = values.includes(preferredValue) ? preferredValue : "12m";
+
+    let currentValues = Array.from(select.options || []).map((opt) => opt.value);
+    let needsRebuild =
+      currentValues.length !== values.length ||
+      currentValues.some((value, index) => value !== values[index]);
+    if (needsRebuild) {
+      select.replaceChildren();
+      this.appendOptions(select, options);
+    }
+
+    select.value = nextValue;
+    return nextValue;
   },
 
   savePref(name, value) {
@@ -1250,9 +1183,7 @@ var MonthlyStats = {
     }
     let ui = state.ui;
     let seq = ++state.loadSeq;
-    ui.statusText.className = "ms-status";
-    ui.statusText.textContent = "正在读取 Zotero 数据...";
-    ui.foot.textContent = "加载中...";
+    ui.subtitle.textContent = "正在读取 Zotero 数据...";
 
     let payload = await this.buildPanelPayload(win, state.selectedCollectionID);
     if (seq !== state.loadSeq) {
@@ -1281,25 +1212,15 @@ var MonthlyStats = {
     this.populateCollectionSelect(state, payload.collections || [], payload.collectionID);
 
     if (!state.viewMode) {
-      let okView = ["bar", "line", "heatmap"].includes(payload.defaultView);
+      let okView = ["bar", "heatmap"].includes(payload.defaultView);
       state.viewMode = okView ? payload.defaultView : "heatmap";
     }
     this.setSegmentActive(ui.viewButtons, state.viewMode, "view");
-
-    if (!ui.rangeSelect.value) {
-      let okRange = ["3m", "6m", "12m", "24m", "all"].includes(payload.defaultRange);
-      ui.rangeSelect.value = okRange ? payload.defaultRange : "12m";
-    }
-
-    if (state.allSeries.length) {
-      if (resetRange || !ui.startMonth.value || !ui.endMonth.value) {
-        ui.startMonth.value = state.allSeries[0].month;
-        ui.endMonth.value = state.allSeries[state.allSeries.length - 1].month;
-      }
-    } else {
-      ui.startMonth.value = "";
-      ui.endMonth.value = "";
-    }
+    this.syncRangeOptions(
+      state,
+      state.rangeInitialized ? ui.rangeSelect.value : payload.defaultRange
+    );
+    state.rangeInitialized = true;
 
     this.updateTabData(state);
     this.renderStats(win);
@@ -1317,22 +1238,13 @@ var MonthlyStats = {
     });
   },
 
-  filterByRange(series, rangeMode, startMonth, endMonth) {
+  filterByRange(series, rangeMode) {
     if (!series.length) {
       return [];
     }
 
     if (rangeMode === "all") {
       return series.slice();
-    }
-
-    if (rangeMode === "custom") {
-      if (!startMonth || !endMonth) {
-        return [];
-      }
-      let start = startMonth <= endMonth ? startMonth : endMonth;
-      let end = startMonth <= endMonth ? endMonth : startMonth;
-      return series.filter((p) => p.month >= start && p.month <= end);
     }
 
     let months = parseInt(rangeMode, 10);
@@ -1361,6 +1273,16 @@ var MonthlyStats = {
     while (svg.firstChild) {
       svg.removeChild(svg.firstChild);
     }
+  },
+
+  setScaledSvg(svg, width, height, minHeight, maxScale) {
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
+
+    let viewportWidth = Number(svg.clientWidth) || Number(svg.parentElement?.clientWidth) || 960;
+    let widthScale = viewportWidth > 0 ? viewportWidth / width : 1;
+    let scale = Math.max(1, Math.min(maxScale || 1, widthScale));
+    svg.style.height = Math.max(minHeight || height, Math.ceil(height * scale)) + "px";
   },
 
   drawGrid(svg, maxY) {
@@ -1464,58 +1386,22 @@ var MonthlyStats = {
     this.drawMonthLabels(svg, series, "bar");
   },
 
-  drawLine(svg, series) {
-    let ns = "http://www.w3.org/2000/svg";
-    let left = 48;
-    let top = 16;
-    let width = 900;
-    let height = 265;
-
-    let max = Math.max(1, ...series.map((p) => p.count));
-    this.drawGrid(svg, max);
-
-    let step = width / Math.max(series.length - 1, 1);
-    let points = series.map((p, i) => {
-      let x = left + i * step;
-      let y = top + height - (p.count / max) * height;
-      return { x, y };
-    });
-
-    let polyline = svg.ownerDocument.createElementNS(ns, "polyline");
-    polyline.setAttribute("fill", "none");
-    polyline.setAttribute("stroke", "var(--accent-teal, #59adc4)");
-    polyline.setAttribute("stroke-width", "2.2");
-    polyline.setAttribute("points", points.map((t) => t.x + "," + t.y).join(" "));
-    svg.appendChild(polyline);
-
-    for (let pt of points) {
-      let c = svg.ownerDocument.createElementNS(ns, "circle");
-      c.setAttribute("cx", pt.x);
-      c.setAttribute("cy", pt.y);
-      c.setAttribute("r", "2.3");
-      c.setAttribute("fill", "var(--accent-blue, #4072e5)");
-      svg.appendChild(c);
-    }
-
-    this.drawMonthLabels(svg, series, "line");
-  },
-
   heatColor(count) {
     if (!count || count <= 0) return "var(--fill-senary, rgba(0, 0, 0, .03))";
-    if (count >= 30) return "var(--accent-blue, #4072e5)";
-    if (count >= 20) return "var(--accent-teal, #59adc4)";
-    if (count >= 12) return "#79c5d0";
-    if (count >= 6) return "#a9dce2";
-    return "#d7eef1";
+    if (count >= 30) return "#1b5e20";
+    if (count >= 20) return "#2e7d32";
+    if (count >= 12) return "#66a96b";
+    if (count >= 6) return "#a5d6a7";
+    return "#dff2df";
   },
 
   heatColorMonthly(count) {
     if (!count || count <= 0) return "var(--fill-senary, rgba(0, 0, 0, .03))";
-    if (count >= 300) return "var(--accent-blue, #4072e5)";
-    if (count >= 200) return "var(--accent-teal, #59adc4)";
-    if (count >= 120) return "#79c5d0";
-    if (count >= 60) return "#a9dce2";
-    return "#d7eef1";
+    if (count >= 300) return "#1b5e20";
+    if (count >= 200) return "#2e7d32";
+    if (count >= 120) return "#66a96b";
+    if (count >= 60) return "#a5d6a7";
+    return "#dff2df";
   },
 
   drawHeatmap(win, svg, dailySeries) {
@@ -1524,12 +1410,6 @@ var MonthlyStats = {
     }
 
     let ns = "http://www.w3.org/2000/svg";
-    let left = 78;
-    let top = 22;
-    let cell = 10;
-    let gap = 2;
-    let labelGap = 16;
-
     let byMonth = new Map();
     for (let d of dailySeries) {
       let month = d.day.slice(0, 7);
@@ -1540,11 +1420,18 @@ var MonthlyStats = {
     }
 
     let months = Array.from(byMonth.keys()).sort();
-    let width = left + 31 * (cell + gap) + 20;
-    let height = top + months.length * (cell + gap + labelGap) + 46;
+    let monthCount = months.length;
+    let left = 86;
+    let top = 28;
+    let cell = monthCount <= 12 ? 16 : monthCount <= 36 ? 14 : 12;
+    let gap = monthCount <= 12 ? 4 : 3;
+    let labelGap = monthCount <= 12 ? 24 : monthCount <= 36 ? 20 : 18;
+    let width = left + 31 * (cell + gap) + 24;
+    let height = top + months.length * (cell + gap + labelGap) + 54;
+    let minHeight = monthCount <= 12 ? 520 : monthCount <= 36 ? 720 : 480;
+    let maxScale = monthCount <= 12 ? 1.45 : monthCount <= 36 ? 1.25 : 1.15;
 
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.style.height = Math.max(220, height) + "px";
+    this.setScaledSvg(svg, width, height, minHeight, maxScale);
     let state = this.windowState.get(win);
     let selectedDay = state?.selectedDay || null;
 
@@ -1553,9 +1440,9 @@ var MonthlyStats = {
       let rowY = top + i * (cell + gap + labelGap);
 
       let monthText = svg.ownerDocument.createElementNS(ns, "text");
-      monthText.setAttribute("x", left - 8);
+      monthText.setAttribute("x", 12);
       monthText.setAttribute("y", rowY + cell - 1);
-      monthText.setAttribute("text-anchor", "end");
+      monthText.setAttribute("text-anchor", "start");
       monthText.setAttribute("font-size", "10");
       monthText.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       monthText.textContent = month;
@@ -1658,24 +1545,131 @@ var MonthlyStats = {
     }
   },
 
+  drawHeatmapGithub(win, svg, dailySeries) {
+    if (!dailySeries.length) {
+      return;
+    }
+
+    let ns = "http://www.w3.org/2000/svg";
+    let cell = 11;
+    let gap = 3;
+    let left = 52;
+    let top = 22;
+    let right = 22;
+    let bottom = 32;
+    let dayMs = 24 * 60 * 60 * 1000;
+
+    let first = new Date(dailySeries[0].day + "T00:00:00Z");
+    let last = new Date(dailySeries[dailySeries.length - 1].day + "T00:00:00Z");
+    if (Number.isNaN(first.getTime()) || Number.isNaN(last.getTime())) {
+      return;
+    }
+
+    let gridStart = new Date(first.getTime());
+    gridStart.setUTCDate(gridStart.getUTCDate() - gridStart.getUTCDay());
+    let gridEnd = new Date(last.getTime());
+    gridEnd.setUTCDate(gridEnd.getUTCDate() + (6 - gridEnd.getUTCDay()));
+    let weeks = Math.max(1, Math.floor((gridEnd - gridStart) / dayMs / 7) + 1);
+    let gridWidth = weeks * cell + (weeks - 1) * gap;
+    let gridHeight = 7 * cell + 6 * gap;
+    let width = left + gridWidth + right;
+    let height = top + gridHeight + bottom;
+    let counts = new Map(dailySeries.map((item) => [item.day, item.count]));
+
+    this.setScaledSvg(svg, width, height, 190, 1.35);
+
+    let state = this.windowState.get(win);
+    let selectedDay = state?.selectedDay || null;
+    let weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    for (let row = 0; row < weekdays.length; row++) {
+      let label = svg.ownerDocument.createElementNS(ns, "text");
+      label.setAttribute("x", 8);
+      label.setAttribute("y", top + row * (cell + gap) + cell / 2 + 3);
+      label.setAttribute("text-anchor", "start");
+      label.setAttribute("font-size", "9");
+      label.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
+      label.textContent = weekdays[row];
+      svg.appendChild(label);
+    }
+
+    let monthLabels = new Map();
+    for (let t = new Date(gridStart.getTime()); t <= gridEnd; t.setUTCDate(t.getUTCDate() + 1)) {
+      let day = this.formatDayKey(t);
+      let dayIndex = Math.round((t - gridStart) / dayMs);
+      let col = Math.floor(dayIndex / 7);
+      let row = t.getUTCDay();
+      let x = left + col * (cell + gap);
+      let y = top + row * (cell + gap);
+      let inRange = t >= first && t <= last;
+      let count = inRange ? counts.get(day) || 0 : 0;
+
+      let rect = svg.ownerDocument.createElementNS(ns, "rect");
+      rect.setAttribute("x", x);
+      rect.setAttribute("y", y);
+      rect.setAttribute("width", cell);
+      rect.setAttribute("height", cell);
+      rect.setAttribute("rx", "1.5");
+      rect.setAttribute("fill", inRange ? this.heatColor(count) : "transparent");
+      rect.setAttribute("opacity", inRange ? "0.96" : "1");
+      if (inRange) {
+        rect.setAttribute("cursor", "pointer");
+        if (selectedDay === day) {
+          rect.setAttribute("stroke", "var(--fill-primary, rgba(0, 0, 0, .86))");
+          rect.setAttribute("stroke-width", "1.3");
+        } else {
+          rect.setAttribute("stroke", "transparent");
+          rect.setAttribute("stroke-width", "0");
+        }
+        let title = svg.ownerDocument.createElementNS(ns, "title");
+        title.textContent = `${day}: ${count} 篇`;
+        rect.appendChild(title);
+        rect.addEventListener("click", () => {
+          let curState = this.windowState.get(win);
+          if (!curState) {
+            return;
+          }
+          curState.selectedDay = curState.selectedDay === day ? null : day;
+          this.updateTabData(curState);
+          this.renderStats(win, true);
+        });
+      }
+      svg.appendChild(rect);
+
+      let monthKey = this.formatMonthKey(t);
+      if (inRange && !monthLabels.has(monthKey)) {
+        monthLabels.set(monthKey, x);
+      }
+    }
+
+    let monthY = height - 10;
+    for (let [month, x] of monthLabels) {
+      let text = svg.ownerDocument.createElementNS(ns, "text");
+      text.setAttribute("x", x);
+      text.setAttribute("y", monthY);
+      text.setAttribute("text-anchor", "start");
+      text.setAttribute("font-size", "9");
+      text.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
+      text.textContent = month;
+      svg.appendChild(text);
+    }
+  },
+
   drawHeatmapMonthly(svg, series) {
     if (!series.length) {
       return;
     }
 
     let ns = "http://www.w3.org/2000/svg";
-    let cell = 14;
-    let gap = 2;
-    let top = 24;
-    let left = 52;
+    let cell = 18;
+    let gap = 4;
+    let top = 28;
+    let left = 60;
 
-    let max = Math.max(1, ...series.map((p) => p.count));
     let gridWidth = 12 * cell + 11 * gap;
     let width = left + gridWidth + 30;
-    let height = top + Math.ceil(series.length / 12) * (cell + gap + 14) + 30;
+    let height = top + Math.ceil(series.length / 12) * (cell + gap + 16) + 34;
 
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.style.height = Math.max(220, height) + "px";
+    this.setScaledSvg(svg, width, height, 280, 1.6);
 
     let yearGroups = new Map();
     for (let p of series) {
@@ -1691,9 +1685,9 @@ var MonthlyStats = {
       let yRowH = cell + gap + 12;
 
       let yearLabel = svg.ownerDocument.createElementNS(ns, "text");
-      yearLabel.setAttribute("x", left - 6);
+      yearLabel.setAttribute("x", 12);
       yearLabel.setAttribute("y", curY + cell / 2 + 4);
-      yearLabel.setAttribute("text-anchor", "end");
+      yearLabel.setAttribute("text-anchor", "start");
       yearLabel.setAttribute("font-size", "10");
       yearLabel.setAttribute("fill", "var(--fill-secondary, rgba(0, 0, 0, .55))");
       yearLabel.setAttribute("font-weight", "600");
@@ -1744,8 +1738,7 @@ var MonthlyStats = {
     let legendWidth = legendWidths.reduce((sum, itemWidth) => sum + itemWidth, 0) + legendGap * (legendItems.length - 1);
     width = Math.max(width, legendWidth + 48);
     height = Math.max(height, legendY + 18);
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.style.height = Math.max(220, height) + "px";
+    this.setScaledSvg(svg, width, height, 280, 1.6);
     let lx = Math.max(24, (width - legendWidth) / 2);
     for (let i = 0; i < legendItems.length; i++) {
       let item = legendItems[i];
@@ -1776,13 +1769,12 @@ var MonthlyStats = {
     }
 
     let ui = state.ui;
+    if (state.viewMode !== "bar" && state.viewMode !== "heatmap") {
+      state.viewMode = "heatmap";
+    }
     let viewMode = state.viewMode || "heatmap";
-    let filtered = this.filterByRange(
-      state.allSeries,
-      ui.rangeSelect.value,
-      ui.startMonth.value,
-      ui.endMonth.value
-    );
+    this.syncRangeOptions(state, ui.rangeSelect.value);
+    let filtered = this.filterByRange(state.allSeries, ui.rangeSelect.value);
     let filteredDaily = this.filterDailyByMonths(state.allDaily, filtered);
     let selectedDayData = null;
     let dayFocusCleared = false;
@@ -1794,19 +1786,24 @@ var MonthlyStats = {
       }
     }
 
-    let debug = state.payload?.debug || {};
-    ui.rawRowsValue.textContent = String(debug.rawRows ?? 0);
-    ui.parsedRowsValue.textContent = String(debug.parsedRows ?? 0);
-    ui.filteredRowsValue.textContent = String(debug.filteredTypeRows ?? 0);
-    ui.invalidRowsValue.textContent = String(debug.invalidDateRows ?? 0);
-    ui.subtitle.textContent = "当前范围 " + filtered.length + " 个月";
-    ui.statusText.className = state.payload?.error ? "ms-status error" : "ms-status";
-    ui.statusText.textContent = state.payload?.error
-      ? "读取失败"
-      : "已载入 Library " + (state.payload?.libraryID || "-");
+    if (state.selectedDay && selectedDayData) {
+      ui.subtitle.textContent =
+        "当前范围 " +
+        filtered.length +
+        " 个月 · 日焦点 " +
+        selectedDayData.day +
+        "（新增 " +
+        selectedDayData.count +
+        " 篇）";
+    } else if (dayFocusCleared) {
+      ui.subtitle.textContent = "当前范围 " + filtered.length + " 个月 · 日焦点已清除";
+    } else {
+      ui.subtitle.textContent = "当前范围 " + filtered.length + " 个月";
+    }
 
     this.clearSvg(ui.chart);
     ui.chart.setAttribute("viewBox", "0 0 960 340");
+    ui.chart.setAttribute("preserveAspectRatio", "xMinYMin meet");
     ui.chart.style.height = "300px";
 
     this.setSegmentActive(ui.viewButtons, viewMode, "view");
@@ -1815,25 +1812,17 @@ var MonthlyStats = {
     if (!canUseMonthlyGran && state.heatGran === "month") {
       state.heatGran = "day";
     }
+    ui.granControl.hidden = !canUseMonthlyGran;
     ui.granSegment.hidden = !canUseMonthlyGran;
     ui.dayGranBtn.classList.toggle("active", state.heatGran === "day");
     ui.monthGranBtn.classList.toggle("active", state.heatGran === "month");
     ui.clearDayBtn.hidden = !state.selectedDay;
-    if (state.selectedDay && selectedDayData) {
-      ui.dayFocusText.textContent =
-        "日焦点: " + selectedDayData.day + "（新增 " + selectedDayData.count + " 篇）";
-    } else if (dayFocusCleared) {
-      ui.dayFocusText.textContent = "日焦点不在当前筛选区间，已清除。";
-    } else {
-      ui.dayFocusText.textContent = isHeatmap ? "点击色块可查看当日详情。" : "";
-    }
 
     if (state.payload?.error) {
       ui.totalValue.textContent = "0";
       ui.avgValue.textContent = "0";
       ui.peakValue.textContent = "-";
-      ui.dayFocusText.textContent = "数据读取错误: " + state.payload.error;
-      ui.foot.textContent = "错误已被限制在统计页内，不会影响 Zotero 库数据。";
+      ui.subtitle.textContent = "读取失败: " + state.payload.error;
       return;
     }
 
@@ -1841,7 +1830,7 @@ var MonthlyStats = {
       ui.totalValue.textContent = "0";
       ui.avgValue.textContent = "0";
       ui.peakValue.textContent = "-";
-      ui.foot.textContent = "当前筛选区间内没有可统计的条目。";
+      ui.subtitle.textContent = "当前筛选区间内没有可统计的条目。";
       return;
     }
 
@@ -1867,18 +1856,18 @@ var MonthlyStats = {
       ui.peakValue.textContent = "-";
     }
 
-    ui.foot.textContent =
-      "切换集合会自动统计该集合及其子集合。" +
-      (fromApply ? " | 已应用: " + new Date().toLocaleTimeString() : "");
+    if (fromApply) {
+      ui.subtitle.textContent += " · 已应用 " + new Date().toLocaleTimeString();
+    }
 
     this.updateTabData(state);
 
-    if (viewMode === "line") {
-      this.drawLine(ui.chart, filtered);
-    } else if (viewMode === "heatmap") {
+    if (viewMode === "heatmap") {
       let gran = state.heatGran || "day";
       if (gran === "month") {
         this.drawHeatmapMonthly(ui.chart, filtered);
+      } else if (ui.rangeSelect.value === "6m") {
+        this.drawHeatmapGithub(win, ui.chart, filteredDaily);
       } else {
         this.drawHeatmap(win, ui.chart, filteredDaily);
       }
