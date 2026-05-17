@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Monthly Literature Stats",
+  "version": "0.4.1",
+  "description": "Visualize monthly added literature counts in Zotero 7, 8, and 9.",
+  "author": "konstellation",
+  "homepage_url": "https://example.com",
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "monthly-stats@konstellation.local",
+      "update_url": "https://example.com/monthly-literature-stats/updates.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "9.0.*"
+    }
+  }
+}
