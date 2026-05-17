@@ -726,6 +726,9 @@ var MonthlyStats = {
 .monthly-stats-root * {
   box-sizing: border-box;
 }
+.monthly-stats-root [hidden] {
+  display: none !important;
+}
 .ms-toolbar {
   display: flex;
   align-items: center;
@@ -1048,16 +1051,8 @@ var MonthlyStats = {
       this.renderStats(win, true);
     });
 
-    dayGranBtn.addEventListener("click", () => {
-      state.heatGran = "day";
-      this.updateTabData(state);
-      this.renderStats(win, false);
-    });
-    monthGranBtn.addEventListener("click", () => {
-      state.heatGran = "month";
-      this.updateTabData(state);
-      this.renderStats(win, false);
-    });
+    dayGranBtn.addEventListener("click", () => this.setHeatGranularity(win, "day"));
+    monthGranBtn.addEventListener("click", () => this.setHeatGranularity(win, "month"));
   },
 
   wrapLabeledControl(doc, label, control) {
@@ -1150,6 +1145,51 @@ var MonthlyStats = {
       let isActive = button.dataset[dataKey] === activeValue;
       button.classList.toggle("active", isActive);
     }
+  },
+
+  canSelectHeatGranularity(viewMode, filteredMonths) {
+    return viewMode === "heatmap" && Array.isArray(filteredMonths) && filteredMonths.length > 24;
+  },
+
+  syncGranularityControl(state, viewMode, filteredMonths) {
+    let ui = state?.ui;
+    if (!ui) {
+      return false;
+    }
+
+    let canSelectGranularity = this.canSelectHeatGranularity(viewMode, filteredMonths);
+    if (!canSelectGranularity && state.heatGran === "month") {
+      state.heatGran = "day";
+    }
+
+    ui.granControl.hidden = !canSelectGranularity;
+    ui.granSegment.hidden = !canSelectGranularity;
+    ui.dayGranBtn.disabled = !canSelectGranularity;
+    ui.monthGranBtn.disabled = !canSelectGranularity;
+    ui.dayGranBtn.classList.toggle("active", state.heatGran === "day");
+    ui.monthGranBtn.classList.toggle("active", state.heatGran === "month");
+
+    return canSelectGranularity;
+  },
+
+  setHeatGranularity(win, value) {
+    let state = this.windowState.get(win);
+    if (!state?.ui) {
+      return;
+    }
+
+    let viewMode = state.viewMode === "bar" ? "bar" : "heatmap";
+    let filtered = this.filterByRange(state.allSeries, state.ui.rangeSelect.value);
+    if (!this.canSelectHeatGranularity(viewMode, filtered)) {
+      state.heatGran = "day";
+      this.updateTabData(state);
+      this.renderStats(win, false);
+      return;
+    }
+
+    state.heatGran = value === "month" ? "month" : "day";
+    this.updateTabData(state);
+    this.renderStats(win, false);
   },
 
   populateCollectionSelect(state, collections, selectedID) {
@@ -1807,15 +1847,7 @@ var MonthlyStats = {
     ui.chart.style.height = "300px";
 
     this.setSegmentActive(ui.viewButtons, viewMode, "view");
-    let isHeatmap = viewMode === "heatmap";
-    let canUseMonthlyGran = isHeatmap && filtered.length > 24;
-    if (!canUseMonthlyGran && state.heatGran === "month") {
-      state.heatGran = "day";
-    }
-    ui.granControl.hidden = !canUseMonthlyGran;
-    ui.granSegment.hidden = !canUseMonthlyGran;
-    ui.dayGranBtn.classList.toggle("active", state.heatGran === "day");
-    ui.monthGranBtn.classList.toggle("active", state.heatGran === "month");
+    let canUseMonthlyGran = this.syncGranularityControl(state, viewMode, filtered);
     ui.clearDayBtn.hidden = !state.selectedDay;
 
     if (state.payload?.error) {

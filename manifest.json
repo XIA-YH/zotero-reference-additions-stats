@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Monthly Literature Stats",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Open a Zotero-native dashboard for monthly added literature counts in Zotero 7, 8, and 9.",
   "author": "konstellation",
   "homepage_url": "https://example.com",
