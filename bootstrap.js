@@ -547,7 +547,7 @@ var MonthlyStats = {
     state.viewMode = initialState.viewMode || null;
 
     state.tabData = {
-      pluginID: this.addon?.id || "monthly-stats@konstellation.local",
+      pluginID: this.addon?.id || "reference-additions-stats@konstellation.local",
       selectedCollectionID: state.selectedCollectionID,
       selectedDay: state.selectedDay,
       heatGran: state.heatGran,

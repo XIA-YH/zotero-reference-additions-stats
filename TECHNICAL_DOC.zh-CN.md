@@ -135,7 +135,7 @@ shasum -a 256 reference-additions-stats-x.y.z.xpi
 ```json
 {
   "addons": {
-    "monthly-stats@konstellation.local": {
+    "reference-additions-stats@konstellation.local": {
       "updates": [
         {
           "version": "0.3.2",
@@ -194,7 +194,7 @@ Zotero 插件生态没有一个强制的“官方应用商店审核流程”，�
 
 ```json
 {
-  "name": "Reference Additions Stats",
+  "name": "Reference Additions Stats / 文献添加统计",
   "author": "Your Name",
   "homepage_url": "https://github.com/yourname/your-plugin",
   "applications": {

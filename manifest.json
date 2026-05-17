@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "Reference Additions Stats",
+  "name": "Reference Additions Stats / 文献添加统计",
   "version": "0.5.4",
-  "description": "Open a Zotero-native dashboard for references added over time in Zotero 7, 8, and 9.",
+  "description": "Open a Zotero-native dashboard for reference additions statistics in Zotero 7, 8, and 9.",
   "author": "konstellation",
   "homepage_url": "https://example.com",
   "icons": {
@@ -11,7 +11,7 @@
   },
   "applications": {
     "zotero": {
-      "id": "monthly-stats@konstellation.local",
+      "id": "reference-additions-stats@konstellation.local",
       "update_url": "https://example.com/reference-additions-stats/updates.json",
       "strict_min_version": "6.999",
       "strict_max_version": "9.0.*"
