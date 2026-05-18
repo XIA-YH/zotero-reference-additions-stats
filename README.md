@@ -2,6 +2,12 @@
 
 一个适配 Zotero 7、8、9 的示例插件，用于在 Zotero 独立标签页中查看“新增文献数量”统计看板，并提供集合过滤、视图与时间范围筛选。
 
+## 效果图
+
+<img src="docs/assets/reference-additions-stats-bar-chart.png" alt="Reference Additions Stats monthly bar chart view" width="100%">
+
+<img src="docs/assets/reference-additions-stats-heatmap.png" alt="Reference Additions Stats heatmap view" width="100%">
+
 ## 功能
 
 - 按月聚合新增文献（基于 `dateAdded`）
