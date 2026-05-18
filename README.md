@@ -6,6 +6,8 @@
 
 <img src="docs/assets/reference-additions-stats-bar-chart.png" alt="Reference Additions Stats monthly bar chart view" width="100%">
 
+<img src="docs/assets/reference-additions-stats-daily-heatmap.png" alt="Reference Additions Stats daily heatmap view" width="100%">
+
 <img src="docs/assets/reference-additions-stats-heatmap.png" alt="Reference Additions Stats heatmap view" width="100%">
 
 ## 功能
